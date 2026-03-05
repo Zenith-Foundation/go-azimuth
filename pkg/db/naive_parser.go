@@ -150,7 +150,8 @@ func (tx NaiveTx) VerifySignature(source_ship_point Point) bool {
 	// Recover the address from signed message and signature
 	pubkey, err := crypto.SigToPub(hash.Sum(nil), tx.Signature[:])
 	if err != nil {
-		panic(err)
+		// Invalid signature (e.g., invalid recovery ID) - verification failed
+		return false
 	}
 	address := crypto.PubkeyToAddress(*pubkey)
 	// fmt.Println(address)
