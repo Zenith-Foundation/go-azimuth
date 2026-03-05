@@ -89,7 +89,7 @@ type EthereumEventLog struct {
 
 func (db *DB) SaveEvent(e *EthereumEventLog) {
 	result, err := db.DB.NamedExec(`
-		insert into ethereum_events (
+		insert or ignore into ethereum_events (
 			            block_number, block_hash, tx_hash, log_index, contract_address, topic0, topic1, topic2, data, is_processed
 			        ) values (
 			            :block_number, :block_hash, :tx_hash, :log_index, :contract_address, :topic0, :topic1, :topic2, :data,
@@ -100,7 +100,7 @@ func (db *DB) SaveEvent(e *EthereumEventLog) {
 		panic(err)
 	}
 
-	// Update the event's ID
+	// Update the event's ID (will be 0 if ignored due to duplicate)
 	new_id, err := result.LastInsertId()
 	if err != nil {
 		panic(err)
