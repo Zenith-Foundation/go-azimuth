@@ -8,7 +8,7 @@ PRAGMA foreign_keys = on;
 create table db_version (
 	version integer
 );
-insert into db_version values(0);
+insert into db_version values(1);
 
 
 -- ============
@@ -180,6 +180,24 @@ create table ethereum_events (rowid integer primary key,
 	foreign key(contract_address, topic0) references event_types(contract_address, hashed_name)
 );
 create index index_ethereum_events_is_processed on ethereum_events(is_processed);
+
+create table blocks (
+	hash blob primary key,
+	number integer not null,
+	parent_hash blob not null,
+	timestamp integer not null
+);
+create index index_blocks_number on blocks(number);
+
+create table transactions (
+	hash blob primary key,
+	block_hash blob not null,
+	block_number integer not null,
+	tx_index integer not null,
+	from_address blob not null default X'0000000000000000000000000000000000000000',
+	to_address blob not null default X'0000000000000000000000000000000000000000'
+);
+create index index_transactions_block_number on transactions(block_number);
 create view readable_ethereum_events as
 	select ethereum_events.rowid as rowid,
 	       block_number,

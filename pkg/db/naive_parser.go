@@ -73,7 +73,14 @@ type NaiveTx struct {
 // 5. Recover public key: pubkey, err := crypto.SigToPub(hash, tx.Signature)
 // 6. Derive address from public key: address := crypto.PubkeyToAddress(*pubKey)
 // 7. Return address == source ship proxy's address
-func (tx NaiveTx) VerifySignature(source_ship_point Point) bool {
+func (tx NaiveTx) VerifySignature(source_ship_point Point) (valid bool) {
+	// Recover from any panics in the crypto library (e.g., invalid signature recovery id)
+	defer func() {
+		if r := recover(); r != nil {
+			valid = false
+		}
+	}()
+
 	var eth_chain_id = []byte("1") // Ethereum Mainnet chain ID
 	var urbit_chain_id = []byte("UrbitIDV1Chain")
 
@@ -135,11 +142,19 @@ func (tx NaiveTx) VerifySignature(source_ship_point Point) bool {
 	// fmt.Printf("Signed data: %x\n", signed_data)
 	// fmt.Printf("Signed data (reversed): %x\n", reverse(signed_data))
 
-	// WTF: Fix "v". `crypto.SigToPub` expects it to be "0" or "1", but it might have +27 added
-	// for some reason, and `go-ethereum/crypto` doesn't handle this!
-	if tx.Signature[len(tx.Signature)-1] >= 27 {
-		tx.Signature[len(tx.Signature)-1] = tx.Signature[len(tx.Signature)-1] - 27
+	// Normalize "v" to 0/1 for go-ethereum; accept 27/28 and EIP-155-style values.
+	v := tx.Signature[len(tx.Signature)-1]
+	switch {
+	case v == 0 || v == 1:
+		// ok
+	case v >= 27 && v <= 28:
+		v -= 27
+	case v >= 35:
+		v = (v - 35) % 2
+	default:
+		return false
 	}
+	tx.Signature[len(tx.Signature)-1] = v
 
 	// Hash it
 	hash := sha3.NewLegacyKeccak256()
@@ -150,7 +165,7 @@ func (tx NaiveTx) VerifySignature(source_ship_point Point) bool {
 	// Recover the address from signed message and signature
 	pubkey, err := crypto.SigToPub(hash.Sum(nil), tx.Signature[:])
 	if err != nil {
-		panic(err)
+		return false
 	}
 	address := crypto.PubkeyToAddress(*pubkey)
 	// fmt.Println(address)

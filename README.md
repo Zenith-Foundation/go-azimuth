@@ -10,6 +10,8 @@ Implemented as a subcommands program.  Available subcommands:
 	Download Azimuth and Naive logs since the smart contracts were launched.
 - play_logs:
 	Play (apply) the existing set of Azimuth and Naive logs already downloaded
+- watch / daemon:
+	Continuously fetch logs, backfill metadata, and apply them on a polling interval.
 - query:
 	Once logs have been downloaded and played, you can query for points.
 - show_logs:
@@ -77,6 +79,14 @@ export ETHEREUM_RPC_URL=https://mainnet.infura.io/v3/<YOUR_API_KEY>
 ./azm play_logs  # This will print some "Signature failed to verify"; it's OK
 ```
 
+### Continuous sync (daemon)
+
+```bash
+./azm watch --interval 15
+```
+
+The daemon polls for new logs, stores block/transaction metadata, and applies events. Use `--max-backoff` to cap retry delay on errors.
+
 ### Tip: speedup with an in-memory database file
 
 Since running the logs makes a lot of db reads and writes, you can speed it up quite a bit by running it on a temporary in-memory directory.  This will temporarily use a large block of memory; 500 MB should be enough.  Everything in that directory will be deleted when it's unmounted or you reboot, so copy the finished database file back to a normal directory once you're done.
@@ -120,4 +130,3 @@ Piping the output of `query` to `jq` makes it pretty-print the JSON.  This is ni
 # Show ~wispem-wantex's Azimuth event history
 ./azm show_logs wispem-wantex
 ```
-

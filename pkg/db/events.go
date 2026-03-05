@@ -1,7 +1,9 @@
 package db
 
 import (
+	"database/sql"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -87,7 +89,12 @@ type EthereumEventLog struct {
 	IsProcessed bool `db:"is_processed"`
 }
 
-func (db *DB) SaveEvent(e *EthereumEventLog) {
+type SaveEventResult struct {
+	Inserted   bool
+	DataLength int
+}
+
+func (db *DB) SaveEvent(e *EthereumEventLog) SaveEventResult {
 	result, err := db.DB.NamedExec(`
 		insert into ethereum_events (
 			            block_number, block_hash, tx_hash, log_index, contract_address, topic0, topic1, topic2, data, is_processed
@@ -95,17 +102,74 @@ func (db *DB) SaveEvent(e *EthereumEventLog) {
 			            :block_number, :block_hash, :tx_hash, :log_index, :contract_address, :topic0, :topic1, :topic2, :data,
 			            :is_processed
 			        )
+		 on conflict (block_number, log_index) do nothing
 	`, e)
 	if err != nil {
 		panic(err)
 	}
 
-	// Update the event's ID
-	new_id, err := result.LastInsertId()
+	rows_affected, err := result.RowsAffected()
 	if err != nil {
 		panic(err)
 	}
-	e.ID = uint64(new_id)
+
+	if rows_affected > 0 {
+		// Update the event's ID
+		new_id, err := result.LastInsertId()
+		if err != nil {
+			panic(err)
+		}
+		e.ID = uint64(new_id)
+		return SaveEventResult{Inserted: true, DataLength: len(e.Data)}
+	}
+
+	var existing struct {
+		ID         uint64 `db:"rowid"`
+		DataLength int    `db:"data_len"`
+	}
+	err = db.DB.Get(&existing, `select rowid, length(data) as data_len from ethereum_events where block_number = ? and log_index = ?`, e.BlockNumber, e.LogIndex)
+	if err != nil {
+		panic(err)
+	}
+	e.ID = existing.ID
+	return SaveEventResult{Inserted: false, DataLength: existing.DataLength}
+}
+
+func (db *DB) GetEventsMissingData(contractAddress common.Address) []EthereumEventLog {
+	var events []EthereumEventLog
+	err := db.DB.Select(&events, `
+		select rowid, block_number, block_hash, tx_hash, log_index, contract_address, topic0, topic1, topic2, data, is_processed
+		  from ethereum_events
+		 where contract_address = ?
+		   and length(data) = 0
+		 order by block_number, log_index
+	`, contractAddress)
+	if errors.Is(err, sql.ErrNoRows) {
+		return []EthereumEventLog{}
+	}
+	if err != nil {
+		panic(err)
+	}
+	return events
+}
+
+func (db *DB) GetEventsMissingMetadata() []EthereumEventLog {
+	var events []EthereumEventLog
+	err := db.DB.Select(&events, `
+		select e.rowid, e.block_number, e.block_hash, e.tx_hash, e.log_index, e.contract_address, e.topic0, e.topic1, e.topic2, e.data, e.is_processed
+		  from ethereum_events e
+		  left join blocks b on b.hash = e.block_hash
+		  left join transactions t on t.hash = e.tx_hash
+		 where b.hash is null or t.hash is null
+		 order by e.block_number, e.log_index
+	`)
+	if errors.Is(err, sql.ErrNoRows) {
+		return []EthereumEventLog{}
+	}
+	if err != nil {
+		panic(err)
+	}
+	return events
 }
 
 // Either create a new event, or add in the Naive Batch data after the fact

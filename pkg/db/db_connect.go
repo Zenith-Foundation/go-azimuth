@@ -13,8 +13,28 @@ import (
 //go:embed schema.sql
 var sql_schema string
 
-// Database starts at version 0.  First migration brings us to version 1
-var MIGRATIONS = []string{}
+// Database starts at version 0. First migration brings us to version 1.
+var MIGRATIONS = []string{
+	`
+	create table if not exists blocks (
+		hash blob primary key,
+		number integer not null,
+		parent_hash blob not null,
+		timestamp integer not null
+	);
+	create index if not exists index_blocks_number on blocks(number);
+
+	create table if not exists transactions (
+		hash blob primary key,
+		block_hash blob not null,
+		block_number integer not null,
+		tx_index integer not null,
+		from_address blob not null default X'0000000000000000000000000000000000000000',
+		to_address blob not null default X'0000000000000000000000000000000000000000'
+	);
+	create index if not exists index_transactions_block_number on transactions(block_number);
+	`,
+}
 var ENGINE_DATABASE_VERSION = len(MIGRATIONS)
 
 var (
@@ -92,7 +112,7 @@ func (db DB) CheckAndUpdateVersion() error {
 	return nil
 }
 
-// Run all the migrations from version X to version Y, and update the `database_version` table's `version_number`
+// Run all the migrations from version X to version Y, and update the db_version table.
 func (db DB) UpgradeFromXToY(x int, y int) error {
 	for i := x; i < y; i++ {
 		fmt.Print(COLOR_CYAN)
@@ -100,7 +120,7 @@ func (db DB) UpgradeFromXToY(x int, y int) error {
 		fmt.Print(COLOR_RESET)
 
 		db.DB.MustExec(MIGRATIONS[i])
-		db.DB.MustExec("update database_version set version_number = ?", i+1)
+		db.DB.MustExec("update db_version set version = ?", i+1)
 
 		fmt.Print(COLOR_YELLOW)
 		fmt.Printf("Now at database schema version %d.\n", i+1)

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethclient"
 
@@ -23,6 +24,8 @@ var ETHEREUM_RPC_URL = ""
 var ROLLER_URL = ""
 
 var DB_PATH = ""
+var WATCH_INTERVAL_SECONDS = 15
+var WATCH_MAX_BACKOFF_SECONDS = 60
 
 func get_db(path string) pkg_db.DB {
 	db, err := pkg_db.DBCreate(path)
@@ -69,6 +72,8 @@ func main() {
 	flag.StringVar(&DB_PATH, "db", "azimuth.db", "database file")
 	flag.StringVar(&ETHEREUM_RPC_URL, "eth-url", ETHEREUM_RPC_URL,
 		"Ethereum node RPC URL (defaults to environment variable ETHEREUM_RPC_URL)")
+	flag.IntVar(&WATCH_INTERVAL_SECONDS, "interval", WATCH_INTERVAL_SECONDS, "watch poll interval (seconds)")
+	flag.IntVar(&WATCH_MAX_BACKOFF_SECONDS, "max-backoff", WATCH_MAX_BACKOFF_SECONDS, "watch max backoff (seconds)")
 
 	flag.Parse()
 	args := flag.Args()
@@ -79,10 +84,12 @@ func main() {
 	}
 
 	switch args[0] {
-	case "catch_up_logs":
+	case "get_logs":
 		catch_up_logs()
 	case "play_logs":
 		play_logs()
+	case "watch", "daemon":
+		watch_logs()
 	case "query":
 		query(args[1])
 	case "show_logs":
@@ -126,16 +133,49 @@ func catch_up_logs() {
 	}
 	defer client.Close()
 
+	if err := catch_up_logs_with(client, db); err != nil {
+		panic(err)
+	}
+}
+
+func catch_up_logs_with(client *ethclient.Client, db pkg_db.DB) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("catch_up_logs panic: %v", r)
+		}
+	}()
+
 	scraper.CatchUpAzimuthLogs(client, db)
 	scraper.CatchUpNaiveLogs(client, db)
+
+	missingMetadata := db.GetEventsMissingMetadata()
+	if len(missingMetadata) > 0 {
+		scraper.EnsureBlockAndTxMetadata(client, db, missingMetadata)
+	}
+
+	return nil
 }
 
 func play_logs() {
 	db := get_db(DB_PATH)
+	if err := play_logs_with(db); err != nil {
+		panic(err)
+	}
+}
+
+func play_logs_with(db pkg_db.DB) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("play_logs panic: %v", r)
+		}
+	}()
+
 	fmt.Println("Playing azimuth logs")
 	db.PlayAzimuthLogs()
 	fmt.Println("Playing naive logs")
 	db.PlayNaiveLogs()
+
+	return nil
 }
 
 func diff_roller() {
@@ -144,6 +184,53 @@ func diff_roller() {
 	fmt.Println("Diffing roller state")
 	if err := CheckPointsAgainstRoller(db, ROLLER_URL); err != nil {
 		fmt.Println(err)
+	}
+}
+
+func watch_logs() {
+	require_eth_rpc_url()
+
+	db := get_db(DB_PATH)
+	client, err := ethclient.Dial(ETHEREUM_RPC_URL)
+	if err != nil {
+		log.Fatalf("Failed to connect to the Ethereum client: %v", err)
+	}
+	defer client.Close()
+
+	interval := time.Duration(WATCH_INTERVAL_SECONDS) * time.Second
+	maxBackoff := time.Duration(WATCH_MAX_BACKOFF_SECONDS) * time.Second
+	if maxBackoff < interval {
+		maxBackoff = interval
+	}
+
+	backoff := interval
+	for {
+		if err := catch_up_logs_with(client, db); err != nil {
+			log.Printf("watch: catch-up failed: %v", err)
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
+		}
+
+		if err := play_logs_with(db); err != nil {
+			log.Printf("watch: play failed: %v", err)
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
+		}
+
+		backoff = interval
+		time.Sleep(interval)
 	}
 }
 
