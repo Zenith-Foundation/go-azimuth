@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -79,20 +80,25 @@ func GetNaiveTransactionData(client *ethclient.Client, db DB, logs []EthereumEve
 
 		ret := []*types.Transaction{} // Has to be pointer type to avoid copying an atomic.Pointer
 		for _, elem := range batch {
-			for _, is_err_service_temp_unavailable := check_error(elem.Error); is_err_service_temp_unavailable; {
-				fmt.Printf("Service temporarily unavailable error.  Pausing 1s and trying again\n")
+			// Retry loop for transient errors
+			for retries := 0; retries < 5; retries++ {
+				if elem.Error == nil {
+					break
+				}
+				errStr := elem.Error.Error()
+				// Check for retryable errors
+				_, is_err_service_temp_unavailable := check_error(elem.Error)
+				is_batch_incomplete := strings.Contains(errStr, "response batch did not contain a response")
+				if !is_err_service_temp_unavailable && !is_batch_incomplete {
+					break // Not a retryable error
+				}
+				fmt.Printf("Retryable error (%s). Pausing 1s and trying again (attempt %d/5)\n", errStr, retries+1)
 				time.Sleep(1 * time.Second)
-				// Try again on temporarily-unavailable errors
+				// Try again with individual request
 				if err := client.Client().BatchCall([]rpc.BatchElem{elem}); err != nil {
 					log.Fatalf("Batch call failed: %#v", err)
 				}
 			}
-			// rpc.BatchElem{
-			// 	Method:"eth_getTransactionByHash",
-			// 	Args:[]interface {}{0xad2f676e4c35c7271123e77bd5616d4e89ae0e93cd0f5a9e4fb93a735ded42be},
-			// 	Result:(*types.Transaction)(0xc000332180),
-			// 	Error: &rpc.jsonError{Code:-32603, Message:"service temporarily unavailable", Data:interface {}(nil)},
-			// }
 			if elem.Error != nil {
 				panic(fmt.Sprintf("%#v (%#v)", elem, elem.Error))
 			}
